@@ -1,214 +1,113 @@
-/*
-  ==============================================================================
-
-    This file contains the basic framework code for a JUCE plugin processor.
-
-  ==============================================================================
-*/
-
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-//==============================================================================
 OverVaxlingAudioProcessor::OverVaxlingAudioProcessor()
-#ifndef JucePlugin_PreferredChannelConfigurations
-     : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       )
-#endif
+    : AudioProcessor(BusesProperties()
+                         .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                         .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
 }
 
-OverVaxlingAudioProcessor::~OverVaxlingAudioProcessor()
-{
-}
+OverVaxlingAudioProcessor::~OverVaxlingAudioProcessor() {}
 
-//==============================================================================
-const juce::String OverVaxlingAudioProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
+const juce::String OverVaxlingAudioProcessor::getName() const { return JucePlugin_Name; }
+bool OverVaxlingAudioProcessor::acceptsMidi() const { return false; }
+bool OverVaxlingAudioProcessor::producesMidi() const { return false; }
+bool OverVaxlingAudioProcessor::isMidiEffect() const { return false; }
+double OverVaxlingAudioProcessor::getTailLengthSeconds() const { return 0.5; }
+int OverVaxlingAudioProcessor::getNumPrograms() { return 1; }
+int OverVaxlingAudioProcessor::getCurrentProgram() { return 0; }
+void OverVaxlingAudioProcessor::setCurrentProgram(int index) {}
+const juce::String OverVaxlingAudioProcessor::getProgramName(int index) { return {}; }
+void OverVaxlingAudioProcessor::changeProgramName(int index, const juce::String &newName) {}
 
-bool OverVaxlingAudioProcessor::acceptsMidi() const
+void OverVaxlingAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-   #if JucePlugin_WantsMidiInput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool OverVaxlingAudioProcessor::producesMidi() const
-{
-   #if JucePlugin_ProducesMidiOutput
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-bool OverVaxlingAudioProcessor::isMidiEffect() const
-{
-   #if JucePlugin_IsMidiEffect
-    return true;
-   #else
-    return false;
-   #endif
-}
-
-double OverVaxlingAudioProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-int OverVaxlingAudioProcessor::getNumPrograms()
-{
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
-}
-
-int OverVaxlingAudioProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void OverVaxlingAudioProcessor::setCurrentProgram (int index)
-{
-}
-
-const juce::String OverVaxlingAudioProcessor::getProgramName (int index)
-{
-    return {};
-}
-
-void OverVaxlingAudioProcessor::changeProgramName (int index, const juce::String& newName)
-{
-}
-
-//==============================================================================
-void OverVaxlingAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    // Use this method as the place to do any pre-playback
-    // initialisation that you need..
-    
     juce::dsp::ProcessSpec spec;
-    
-    spec.maximumBlockSize = samplesPerBlock;
-    spec.numChannels = 1;
-    
     spec.sampleRate = sampleRate;
-    
-    leftChain.prepare(spec);
-    rightChain.prepare(spec);
+    spec.maximumBlockSize = samplesPerBlock;
+    spec.numChannels = getTotalNumOutputChannels();
+
+    processorChain.prepare(spec);
 }
 
-void OverVaxlingAudioProcessor::releaseResources()
+void OverVaxlingAudioProcessor::releaseResources() {}
+
+bool OverVaxlingAudioProcessor::isBusesLayoutSupported(const BusesLayout &layouts) const
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
+    return layouts.getMainInputChannelSet() == layouts.getMainOutputChannelSet() && (layouts.getMainInputChannelSet() == juce::AudioChannelSet::mono() || layouts.getMainInputChannelSet() == juce::AudioChannelSet::stereo());
 }
 
-#ifndef JucePlugin_PreferredChannelConfigurations
-bool OverVaxlingAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-  #if JucePlugin_IsMidiEffect
-    juce::ignoreUnused (layouts);
-    return true;
-  #else
-    // This is the place where you check if the layout is supported.
-    // In this template code we only support mono or stereo.
-    // Some plugin hosts, such as certain GarageBand versions, will only
-    // load plugins that support stereo bus layouts.
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-   #endif
-
-    return true;
-  #endif
-}
-#endif
-
-void OverVaxlingAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void OverVaxlingAudioProcessor::processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &)
 {
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // In case we have more outputs than inputs, this code clears any output
-    // channels that didn't contain input data, (because these aren't
-    // guaranteed to be empty - they may contain garbage).
-    // This is here to avoid people getting screaming feedback
-    // when they first compile a plugin, but obviously you don't need to keep
-    // this code if your algorithm always overwrites all the output channels.
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
+    auto chainSettings = getChainSettings(apvts);
+
+    auto &gainProcessor = processorChain.get<0>();
+    gainProcessor.setGainLinear(chainSettings.gain * 2);
+
+    auto &reverbProcessor = processorChain.get<1>();
+    juce::dsp::Reverb::Parameters reverbParams;
+    reverbParams.roomSize = chainSettings.reverbMix;
+    reverbParams.wetLevel = chainSettings.reverbMix;
+    reverbProcessor.setParameters(reverbParams);
+
+    auto &compressor = processorChain.get<2>();
+    float sliderValue = chainSettings.compressMix;
+    float threshold = -20.0f + (sliderValue * 0.2f);
+    float ratio = 1.0f + std::log10(1.0f + sliderValue);
+    float attack = 0.5f + (sliderValue * 0.05f);
+    float release = 50.0f + (sliderValue * sliderValue * 0.2f);
+
+    compressor.setThreshold(threshold);
+    compressor.setRatio(ratio);
+    compressor.setAttack(attack);
+    compressor.setRelease(release);
 
     juce::dsp::AudioBlock<float> block(buffer);
-    
-    auto leftBlock = block.getSingleChannelBlock(0);
-    auto rightBlock = block.getSingleChannelBlock(1);
-    
-    
-    juce::dsp::ProcessContextReplacing<float> leftContext(leftBlock);
-    juce::dsp::ProcessContextReplacing<float> rightContext(rightBlock);
-    
-    leftChain.process(leftContext);
-    rightChain.process(rightContext);
-    
-    
+    juce::dsp::ProcessContextReplacing<float> context(block);
+    processorChain.process(context);
 }
 
-//==============================================================================
-bool OverVaxlingAudioProcessor::hasEditor() const
+bool OverVaxlingAudioProcessor::hasEditor() const { return true; }
+juce::AudioProcessorEditor *OverVaxlingAudioProcessor::createEditor() { return new OverVaxlingAudioProcessorEditor(*this); }
+
+void OverVaxlingAudioProcessor::getStateInformation(juce::MemoryBlock &destData)
 {
-    return true; // (change this to false if you choose to not supply an editor)
+    juce::MemoryOutputStream stream(destData, true);
+    apvts.state.writeToStream(stream);
 }
 
-juce::AudioProcessorEditor* OverVaxlingAudioProcessor::createEditor()
+void OverVaxlingAudioProcessor::setStateInformation(const void *data, int sizeInBytes)
 {
-//    return new OverVaxlingAudioProcessorEditor (*this);
-    
-    return new juce::GenericAudioProcessorEditor(*this);
+    auto tree = juce::ValueTree::readFromData(data, sizeInBytes);
+    if (tree.isValid())
+        apvts.replaceState(tree);
 }
 
-//==============================================================================
-void OverVaxlingAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+ChainSettings getChainSettings(juce::AudioProcessorValueTreeState &apvts)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    ChainSettings settings;
+    settings.gain = apvts.getRawParameterValue("Gain")->load();
+    settings.reverbMix = apvts.getRawParameterValue("ReverbMix")->load();
+    settings.compressMix = apvts.getRawParameterValue("Compressor")->load();
+
+    return settings;
 }
 
-void OverVaxlingAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
-{
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-}
-
-juce::AudioProcessorValueTreeState::ParameterLayout
-OverVaxlingAudioProcessor::createParameterLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout OverVaxlingAudioProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
-    layout.add(std::make_unique<juce::AudioParameterFloat>("Schwhat", "Schwhat", juce::NormalisableRange<float>(0.f, 100.f, 1.f, 1.f), 1.f));
-    
-    
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>("Gain", "Fa et hjerte i en lydfil", 0.0f, 50.0f, 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("ReverbMix", "Rumklang skal maxes", 0.0f, 1.0f, 0.5f));
+    layout.add(std::make_unique<juce::AudioParameterFloat>("Compressor", "Comp skal maxes", 0.0f, 50.0f, 0.5f));
+
     return layout;
 }
 
-//==============================================================================
-// This creates new instances of the plugin..
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter()
 {
     return new OverVaxlingAudioProcessor();
 }
